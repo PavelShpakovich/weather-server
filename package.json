@@ -1,8 +1,8 @@
 {
   "name": "geely-weather-proxy",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Weather proxy for Geely E8 — adds 20 Belarusian cities via Open-Meteo",
+  "description": "Weather proxy for Geely E8 — Belarusian cities + CN→RU translation via Open-Meteo",
   "engines": {
     "node": ">=18.x"
   }

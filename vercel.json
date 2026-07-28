@@ -1,5 +1,8 @@
 {
-  "rewrites": [
-    { "source": "/geely/:match*", "destination": "/api" }
-  ]
+  "rewrites": [{ "source": "/geely/:match*", "destination": "/api" }],
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 30
+    }
+  }
 }

@@ -1,8 +1,15 @@
-# Geely Weather Proxy — белорусские города
+# Geely Weather Proxy v2.0 — белорусские города + CN→RU перевод
 
-Vercel serverless proxy, добавляющий 20 белорусских городов в штатное приложение
-погоды Geely Galaxy E8 (E171). Работает в паре с Magisk-модулем
-`com_geely_service_cloud` из репозитория `platform-tools`.
+Vercel serverless proxy для штатного приложения погоды Geely Galaxy E8 (E171).
+Добавляет 20 белорусских городов (Open-Meteo) и **переводит все китайские данные на русский**.
+
+## Что нового в v2.0
+
+- **CN→RU перевод** — все проксированные ответы Geely API автоматически переводятся
+  (погодные явления, направления ветра). Модуль `lib/translate.js`.
+- **Русские имена городов** — `nameCN` для BY городов содержит русские названия
+  (Минск, Брест…), поэтому локальный поиск в приложении работает на русском.
+- **maxDuration: 30** в vercel.json для надёжности проксирования.
 
 ## Архитектура
 
@@ -11,9 +18,19 @@ Vercel serverless proxy, добавляющий 20 белорусских гор
     │  persist.geely.weather.proxy = https://<project>.vercel.app
     ▼
 Vercel (этот репозиторий)
-    ├── areaId BY_xx → Open-Meteo API (бесплатно, без ключа)
-    └── остальные    → прокси на oneoss-ecu.geely.com
+    ├── areaId BY_xx → Open-Meteo API (бесплатно, без ключа, русский)
+    └── остальные    → прокси на oneoss-ecu.geely.com + CN→RU перевод
 ```
+
+## Файлы
+
+| Файл               | Назначение                                       |
+| ------------------ | ------------------------------------------------ |
+| `api/index.js`     | Vercel serverless handler — роутинг запросов     |
+| `lib/cities.js`    | 20 белорусских городов (русские имена в nameCN)  |
+| `lib/openmeteo.js` | Open-Meteo API → формат Geely WeatherInfo        |
+| `lib/translate.js` | CN→RU словари + рекурсивный перевод JSON-ответов |
+| `vercel.json`      | Rewrites + maxDuration                           |
 
 ## Деплой на Vercel
 
@@ -33,9 +50,12 @@ adb shell su -c "setprop persist.geely.weather.proxy https://geely-weather-proxy
 
 # Перезапустить облачный сервис
 adb shell su -c "am force-stop com.geely.service.cloud"
+
+# Установить мод погоды (русские табы, arrays.xml, layout)
+node car-mods/scripts/install-mod.js --package com.geely.weather
 ```
 
-## Города
+## Города (20, русские названия)
 
 Минск, Брест, Гродно, Витебск, Могилёв, Гомель, Барановичи, Бобруйск,
 Борисов, Пинск, Орша, Мозырь, Солигорск, Новополоцк, Лида, Молодечно,
@@ -43,8 +63,8 @@ adb shell su -c "am force-stop com.geely.service.cloud"
 
 ## Переменные окружения (опционально)
 
-| Переменная | По умолчанию | Описание |
-|---|---|---|
+| Переменная       | По умолчанию                   | Описание                   |
+| ---------------- | ------------------------------ | -------------------------- |
 | `GEELY_UPSTREAM` | `https://oneoss-ecu.geely.com` | Апстрим для не-BY запросов |
 
 ## Локальная проверка
@@ -52,10 +72,12 @@ adb shell su -c "am force-stop com.geely.service.cloud"
 ```bash
 npx vercel dev
 curl "http://localhost:3000/geely/znzc/oneos/climate/current?areaId=BY_01"
+curl "http://localhost:3000/geely/znzc/oneos/climate/citys?page=1"
 ```
 
 ## Откат
 
 ```bash
 adb shell su -c "setprop persist.geely.weather.proxy https://oneoss-ecu.geely.com"
+adb shell su -c "am force-stop com.geely.service.cloud"
 ```
