@@ -1,5 +1,6 @@
-// Vercel serverless handler — Geely weather proxy v2.0
+// Vercel serverless handler — Geely weather proxy v3.0
 // Routes /geely/znzc/oneos/climate/* : BY cities → Open-Meteo, rest → Geely cloud + CN→RU translation.
+// v3.0: added /searchCity endpoint + keyword filtering in /citys
 "use strict";
 
 const {
@@ -53,12 +54,50 @@ module.exports = async (req, res) => {
   const city = byId.get(areaId);
 
   try {
-    // --- City list ---
+    // --- City list (with optional keyword filter) ---
     if (path.endsWith("/climate/citys")) {
       const page = parseInt(url.searchParams.get("page") || "1", 10);
-      if (page === 1) return res.status(200).json(ok(BY_CITIES.map(cityBean)));
+      const keyword = (
+        url.searchParams.get("keyword") ||
+        url.searchParams.get("cityName") ||
+        ""
+      ).toLowerCase();
+      if (page === 1) {
+        let cities = BY_CITIES;
+        if (keyword) {
+          cities = cities.filter(
+            (c) =>
+              c.nameCN.toLowerCase().includes(keyword) ||
+              c.nameEN.toLowerCase().includes(keyword) ||
+              c.districtCN.toLowerCase().includes(keyword),
+          );
+        }
+        return res.status(200).json(ok(cities.map(cityBean)));
+      }
       const r = await proxyGeely(req, req.url);
       return res.status(r.status).send(translateResponse(r.body));
+    }
+
+    // --- City search (by name) ---
+    if (
+      path.endsWith("/climate/searchCity") ||
+      path.endsWith("/climate/search")
+    ) {
+      const q = (
+        url.searchParams.get("keyword") ||
+        url.searchParams.get("cityName") ||
+        url.searchParams.get("q") ||
+        ""
+      ).toLowerCase();
+      if (!q) return res.status(200).json(ok([]));
+      const results = BY_CITIES.filter(
+        (c) =>
+          c.nameCN.toLowerCase().includes(q) ||
+          c.nameEN.toLowerCase().includes(q) ||
+          c.districtCN.toLowerCase().includes(q) ||
+          c.provCN.toLowerCase().includes(q),
+      ).map(cityBean);
+      return res.status(200).json(ok(results));
     }
 
     // --- City management list (per VIN) ---
