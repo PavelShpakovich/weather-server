@@ -19,6 +19,23 @@ function ok(data) {
   return { code: 200, message: "success", success: true, data };
 }
 
+function parsePage(url) {
+  const raw = url.searchParams.get("page") || url.searchParams.get("pageNo") || "1";
+  const page = parseInt(raw, 10);
+  return Number.isNaN(page) ? 1 : page;
+}
+
+function byKeyword(keyword) {
+  if (!keyword) return BY_CITIES;
+  return BY_CITIES.filter(
+    (c) =>
+      c.nameCN.toLowerCase().includes(keyword) ||
+      c.nameEN.toLowerCase().includes(keyword) ||
+      c.districtCN.toLowerCase().includes(keyword) ||
+      c.provCN.toLowerCase().includes(keyword),
+  );
+}
+
 async function proxyGeely(req, path) {
   const url = `${GEELY_BASE}${path}`;
   const headers = {};
@@ -56,33 +73,54 @@ module.exports = async (req, res) => {
   try {
     // --- City list (with optional keyword filter) ---
     if (path.endsWith("/climate/citys")) {
-      const page = parseInt(url.searchParams.get("page") || "1", 10);
+      const page = parsePage(url);
       const keyword = (
         url.searchParams.get("keyword") ||
         url.searchParams.get("cityName") ||
         ""
       ).toLowerCase();
-      if (page === 1) {
-        let cities = BY_CITIES;
-        if (keyword) {
-          cities = cities.filter(
-            (c) =>
-              c.nameCN.toLowerCase().includes(keyword) ||
-              c.nameEN.toLowerCase().includes(keyword) ||
-              c.districtCN.toLowerCase().includes(keyword),
-          );
+      const byMatches = byKeyword(keyword).map(cityBean);
+
+      if (page === 0 || page === 1) {
+        try {
+          const r = await proxyGeely(req, req.url);
+          const bean = JSON.parse(r.body);
+          const data = bean && typeof bean === "object" ? bean.data : null;
+
+          if (bean.code === 200 && data && Array.isArray(data.list)) {
+            const seen = new Set();
+            const list = [...byMatches, ...data.list].filter((item) => {
+              const key = item?.areaId || `${item?.provCN || ""}:${item?.nameCN || ""}`;
+              if (!key || seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
+
+            return res.status(r.status).json(
+              ok({
+                ...data,
+                list,
+                pageNo: data.pageNo ?? page,
+                pageSize: list.length,
+                total: String(Math.max(parseInt(data.total || "0", 10) || 0, list.length)),
+              }),
+            );
+          }
+        } catch {
+          // Fall back to BY-only response below.
         }
-        const list = cities.map(cityBean);
+
         return res.status(200).json(
           ok({
-            list,
-            pageNo: 1,
-            pageSize: list.length,
-            total: String(list.length),
+            list: byMatches,
+            pageNo: page,
+            pageSize: byMatches.length,
+            total: String(byMatches.length),
             end: true,
           }),
         );
       }
+
       const r = await proxyGeely(req, req.url);
       return res.status(r.status).send(translateResponse(r.body));
     }
