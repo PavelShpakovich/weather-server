@@ -72,7 +72,16 @@ module.exports = async (req, res) => {
               c.districtCN.toLowerCase().includes(keyword),
           );
         }
-        return res.status(200).json(ok(cities.map(cityBean)));
+        const list = cities.map(cityBean);
+        return res.status(200).json(
+          ok({
+            list,
+            pageNo: 1,
+            pageSize: list.length,
+            total: String(list.length),
+            end: true,
+          }),
+        );
       }
       const r = await proxyGeely(req, req.url);
       return res.status(r.status).send(translateResponse(r.body));
