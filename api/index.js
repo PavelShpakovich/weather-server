@@ -121,8 +121,23 @@ module.exports = async (req, res) => {
         }
         return res.status(r.status).json(bean);
       } catch {
-        // Geely upstream unreachable — return BY cities as fallback
-        const list = BY_CITIES.slice(0, 3).map(cityBean);
+        // Geely upstream unreachable — return BY cities with live weather
+        const top3 = BY_CITIES.slice(0, 3);
+        const list = await Promise.all(
+          top3.map(async (c) => {
+            const bean = cityBean(c);
+            try {
+              const cur = await openmeteo.current(c);
+              bean.currentTemp = cur.currentTemp;
+              bean.weathPheno = cur.weathPheno;
+              bean.currentRelaHumid = cur.currentRelaHumid;
+              bean.aqi = cur.aqi;
+            } catch {
+              /* leave defaults */
+            }
+            return bean;
+          }),
+        );
         return res.status(200).json(ok(list));
       }
     }
