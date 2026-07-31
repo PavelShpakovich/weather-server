@@ -111,8 +111,8 @@ module.exports = async (req, res) => {
 
     // --- City management list (per VIN) ---
     if (path.endsWith("/climate/cityList")) {
-      const r = await proxyGeely(req, req.url);
       try {
+        const r = await proxyGeely(req, req.url);
         const bean = JSON.parse(r.body);
         if (bean.code === 200 && Array.isArray(bean.data)) {
           if (!bean.data.some((c) => c.areaId?.startsWith("BY_"))) {
@@ -121,7 +121,9 @@ module.exports = async (req, res) => {
         }
         return res.status(r.status).json(bean);
       } catch {
-        return res.status(r.status).send(r.body);
+        // Geely upstream unreachable — return BY cities as fallback
+        const list = BY_CITIES.slice(0, 3).map(cityBean);
+        return res.status(200).json(ok(list));
       }
     }
 
