@@ -20,7 +20,8 @@ function ok(data) {
 }
 
 function parsePage(url) {
-  const raw = url.searchParams.get("page") || url.searchParams.get("pageNo") || "1";
+  const raw =
+    url.searchParams.get("page") || url.searchParams.get("pageNo") || "1";
   const page = parseInt(raw, 10);
   return Number.isNaN(page) ? 1 : page;
 }
@@ -90,7 +91,8 @@ module.exports = async (req, res) => {
           if (bean.code === 200 && data && Array.isArray(data.list)) {
             const seen = new Set();
             const list = [...byMatches, ...data.list].filter((item) => {
-              const key = item?.areaId || `${item?.provCN || ""}:${item?.nameCN || ""}`;
+              const key =
+                item?.areaId || `${item?.provCN || ""}:${item?.nameCN || ""}`;
               if (!key || seen.has(key)) return false;
               seen.add(key);
               return true;
@@ -102,7 +104,9 @@ module.exports = async (req, res) => {
                 list,
                 pageNo: data.pageNo ?? page,
                 pageSize: list.length,
-                total: String(Math.max(parseInt(data.total || "0", 10) || 0, list.length)),
+                total: String(
+                  Math.max(parseInt(data.total || "0", 10) || 0, list.length),
+                ),
               }),
             );
           }
@@ -170,6 +174,8 @@ module.exports = async (req, res) => {
               bean.weathPheno = cur.weathPheno;
               bean.currentRelaHumid = cur.currentRelaHumid;
               bean.aqi = cur.aqi;
+              bean.allMinTemp = cur.allMinTemp;
+              bean.allMaxTemp = cur.allMaxTemp;
             } catch {
               /* leave defaults */
             }
