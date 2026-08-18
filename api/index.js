@@ -1,6 +1,5 @@
-// Vercel serverless handler — Geely weather proxy v3.0
-// Routes /geely/znzc/oneos/climate/* : BY cities → Open-Meteo, rest → Geely cloud + CN→RU translation.
-// v3.0: added /searchCity endpoint + keyword filtering in /citys
+// Vercel serverless handler — worldwide Open-Meteo weather proxy.
+// Routes /geely/znzc/oneos/climate/* using BY_xx or OM_<lat>_<lon> area IDs.
 "use strict";
 
 const {
@@ -11,9 +10,7 @@ const {
   isInBelarus,
 } = require("../lib/cities");
 const openmeteo = require("../lib/openmeteo");
-const { translateResponse } = require("../lib/translate");
-
-const GEELY_BASE = process.env.GEELY_UPSTREAM || "https://oneoss-ecu.geely.com";
+const geocoding = require("../lib/geocoding");
 
 function ok(data) {
   return { code: 200, message: "success", success: true, data };
@@ -37,39 +34,23 @@ function byKeyword(keyword) {
   );
 }
 
-async function proxyGeely(req, path) {
-  const url = `${GEELY_BASE}${path}`;
-  const headers = {};
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (
-      ![
-        "host",
-        "connection",
-        "x-forwarded-for",
-        "x-forwarded-proto",
-        "x-vercel-proxy",
-      ].includes(k.toLowerCase())
-    ) {
-      headers[k] = v;
-    }
-  }
-  const opts = { method: req.method, headers };
-  if (req.method === "POST" && req.body) {
-    opts.body =
-      typeof req.body === "string" ? req.body : JSON.stringify(req.body);
-    headers["content-type"] = "application/json";
-  }
-  const res = await fetch(url, opts);
-  const body = await res.text();
-  return { status: res.status, body };
+function cityForAreaId(areaId) {
+  const byCity = byId.get(areaId);
+  if (byCity) return byCity;
+  const match = /^OM_(-?\d+(?:\.\d+)?)_(-?\d+(?:\.\d+)?)$/.exec(areaId);
+  if (!match) return null;
+  return {
+    id: areaId,
+    lat: Number(match[1]),
+    lon: Number(match[2]),
+  };
 }
 
 module.exports = async (req, res) => {
   const url = new URL(req.url, `https://${req.headers.host || "localhost"}`);
   const path = url.pathname;
   const areaId = url.searchParams.get("areaId") || "";
-  const isBY = areaId.startsWith("BY_");
-  const city = byId.get(areaId);
+  const city = cityForAreaId(areaId);
 
   try {
     // --- City list (with optional keyword filter) ---
@@ -82,51 +63,16 @@ module.exports = async (req, res) => {
       ).toLowerCase();
       const byMatches = byKeyword(keyword).map(cityBean);
 
-      if (page === 0 || page === 1) {
-        try {
-          const r = await proxyGeely(req, req.url);
-          const bean = JSON.parse(r.body);
-          const data = bean && typeof bean === "object" ? bean.data : null;
-
-          if (bean.code === 200 && data && Array.isArray(data.list)) {
-            const seen = new Set();
-            const list = [...byMatches, ...data.list].filter((item) => {
-              const key =
-                item?.areaId || `${item?.provCN || ""}:${item?.nameCN || ""}`;
-              if (!key || seen.has(key)) return false;
-              seen.add(key);
-              return true;
-            });
-
-            return res.status(r.status).json(
-              ok({
-                ...data,
-                list,
-                pageNo: data.pageNo ?? page,
-                pageSize: list.length,
-                total: String(
-                  Math.max(parseInt(data.total || "0", 10) || 0, list.length),
-                ),
-              }),
-            );
-          }
-        } catch {
-          // Fall back to BY-only response below.
-        }
-
-        return res.status(200).json(
-          ok({
-            list: byMatches,
-            pageNo: page,
-            pageSize: byMatches.length,
-            total: String(byMatches.length),
-            end: true,
-          }),
-        );
+      if (page > 1) {
+        return res.status(200).json(ok({ list: [], pageNo: page, pageSize: 0, total: String(byMatches.length), end: true }));
       }
-
-      const r = await proxyGeely(req, req.url);
-      return res.status(r.status).send(translateResponse(r.body));
+      return res.status(200).json(ok({
+        list: byMatches,
+        pageNo: page,
+        pageSize: byMatches.length,
+        total: String(byMatches.length),
+        end: true,
+      }));
     }
 
     // --- City search (by name) ---
@@ -141,65 +87,48 @@ module.exports = async (req, res) => {
         ""
       ).toLowerCase();
       if (!q) return res.status(200).json(ok([]));
-      const results = BY_CITIES.filter(
+      const localResults = BY_CITIES.filter(
         (c) =>
           c.nameCN.toLowerCase().includes(q) ||
           c.nameEN.toLowerCase().includes(q) ||
           c.districtCN.toLowerCase().includes(q) ||
           c.provCN.toLowerCase().includes(q),
       ).map(cityBean);
+      const remoteResults = await geocoding.search(q);
+      const seen = new Set();
+      const results = [...localResults, ...remoteResults].filter((item) => {
+        if (seen.has(item.areaId)) return false;
+        seen.add(item.areaId);
+        return true;
+      });
       return res.status(200).json(ok(results));
     }
 
     // --- City management list (per VIN) ---
     if (path.endsWith("/climate/cityList")) {
-      try {
-        const r = await proxyGeely(req, req.url);
-        const bean = JSON.parse(r.body);
-        if (bean.code === 200 && Array.isArray(bean.data)) {
-          if (!bean.data.some((c) => c.areaId?.startsWith("BY_"))) {
-            bean.data.unshift(cityBean(BY_CITIES[0]));
-          }
+      const list = await Promise.all(BY_CITIES.slice(0, 3).map(async (c) => {
+        const bean = cityBean(c);
+        try {
+          const cur = await openmeteo.current(c);
+          Object.assign(bean, cur);
+        } catch {
+          // Keep the city visible when weather fetch is temporarily unavailable.
         }
-        return res.status(r.status).json(bean);
-      } catch {
-        // Geely upstream unreachable — return BY cities with live weather
-        const top3 = BY_CITIES.slice(0, 3);
-        const list = await Promise.all(
-          top3.map(async (c) => {
-            const bean = cityBean(c);
-            try {
-              const cur = await openmeteo.current(c);
-              bean.currentTemp = cur.currentTemp;
-              bean.weathPheno = cur.weathPheno;
-              bean.currentRelaHumid = cur.currentRelaHumid;
-              bean.aqi = cur.aqi;
-              bean.allMinTemp = cur.allMinTemp;
-              bean.allMaxTemp = cur.allMaxTemp;
-            } catch {
-              /* leave defaults */
-            }
-            return bean;
-          }),
-        );
-        return res.status(200).json(ok(list));
-      }
+        return bean;
+      }));
+      return res.status(200).json(ok(list));
     }
 
     // --- Current weather ---
     if (path.endsWith("/climate/current")) {
-      if (isBY && city)
-        return res.status(200).json(ok(await openmeteo.current(city)));
-      const r = await proxyGeely(req, req.url);
-      return res.status(r.status).send(translateResponse(r.body));
+      if (!city) return res.status(400).json(ok(null));
+      return res.status(200).json(ok(await openmeteo.current(city)));
     }
 
     // --- Hourly forecast ---
     if (path.endsWith("/climate/hours")) {
-      if (isBY && city)
-        return res.status(200).json(ok(await openmeteo.hours(city)));
-      const r = await proxyGeely(req, req.url);
-      return res.status(r.status).send(translateResponse(r.body));
+      if (!city) return res.status(400).json(ok(null));
+      return res.status(200).json(ok(await openmeteo.hours(city)));
     }
 
     // --- 15-day forecast ---
@@ -207,18 +136,14 @@ module.exports = async (req, res) => {
       path.endsWith("/climate/newhalfmonth") ||
       path.endsWith("/climate/halfmonth")
     ) {
-      if (isBY && city)
-        return res.status(200).json(ok(await openmeteo.forecast(city)));
-      const r = await proxyGeely(req, req.url);
-      return res.status(r.status).send(translateResponse(r.body));
+      if (!city) return res.status(400).json(ok(null));
+      return res.status(200).json(ok(await openmeteo.forecast(city)));
     }
 
     // --- Sunrise / sunset ---
     if (path.endsWith("/climate/sunriseAndSunset")) {
-      if (isBY && city)
-        return res.status(200).json(ok(await openmeteo.sun(city)));
-      const r = await proxyGeely(req, req.url);
-      return res.status(r.status).send(translateResponse(r.body));
+      if (!city) return res.status(400).json(ok(null));
+      return res.status(200).json(ok(await openmeteo.sun(city)));
     }
 
     // --- Area lookup by coordinates ---
@@ -228,8 +153,19 @@ module.exports = async (req, res) => {
       if (!isNaN(lat) && !isNaN(lon) && isInBelarus(lat, lon)) {
         return res.status(200).json(ok(cityBean(nearestBYCity(lat, lon))));
       }
-      const r = await proxyGeely(req, req.url);
-      return res.status(r.status).send(translateResponse(r.body));
+      if (!isNaN(lat) && !isNaN(lon)) {
+        return res.status(200).json(ok({
+          areaId: `OM_${lat.toFixed(4)}_${lon.toFixed(4)}`,
+          nameCN: "",
+          nameEN: "",
+          provCN: "",
+          provEN: "",
+          districtCN: "",
+          districtEN: "",
+          direct: 0,
+        }));
+      }
+      return res.status(400).json(ok(null));
     }
 
     // --- Bind/unbind city ---
@@ -238,14 +174,10 @@ module.exports = async (req, res) => {
         typeof req.body === "string"
           ? JSON.parse(req.body || "{}")
           : req.body || {};
-      if (body.areaId?.startsWith("BY_")) return res.status(200).json(ok(null));
-      const r = await proxyGeely(req, req.url);
-      return res.status(r.status).send(r.body);
+      return res.status(200).json(ok(null));
     }
 
-    // --- Everything else: proxy with translation ---
-    const r = await proxyGeely(req, req.url);
-    res.status(r.status).send(translateResponse(r.body));
+    return res.status(404).json({ code: 404, message: "Unknown climate endpoint", success: false, data: null });
   } catch (err) {
     console.error(`[proxy] ${path}: ${err.message}`);
     res
