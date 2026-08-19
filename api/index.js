@@ -11,6 +11,7 @@ const {
 } = require("../lib/cities");
 const openmeteo = require("../lib/openmeteo");
 const geocoding = require("../lib/geocoding");
+const boundCities = require("../lib/bound-cities");
 
 function ok(data) {
   return { code: 200, message: "success", success: true, data };
@@ -64,15 +65,25 @@ module.exports = async (req, res) => {
       const byMatches = byKeyword(keyword).map(cityBean);
 
       if (page > 1) {
-        return res.status(200).json(ok({ list: [], pageNo: page, pageSize: 0, total: String(byMatches.length), end: true }));
+        return res.status(200).json(
+          ok({
+            list: [],
+            pageNo: page,
+            pageSize: 0,
+            total: String(byMatches.length),
+            end: true,
+          }),
+        );
       }
-      return res.status(200).json(ok({
-        list: byMatches,
-        pageNo: page,
-        pageSize: byMatches.length,
-        total: String(byMatches.length),
-        end: true,
-      }));
+      return res.status(200).json(
+        ok({
+          list: byMatches,
+          pageNo: page,
+          pageSize: byMatches.length,
+          total: String(byMatches.length),
+          end: true,
+        }),
+      );
     }
 
     // --- City search (by name) ---
@@ -106,16 +117,21 @@ module.exports = async (req, res) => {
 
     // --- City management list (per VIN) ---
     if (path.endsWith("/climate/cityList")) {
-      const list = await Promise.all(BY_CITIES.slice(0, 3).map(async (c) => {
-        const bean = cityBean(c);
-        try {
-          const cur = await openmeteo.current(c);
-          Object.assign(bean, cur);
-        } catch {
-          // Keep the city visible when weather fetch is temporarily unavailable.
-        }
-        return bean;
-      }));
+      const list = await Promise.all(
+        boundCities.listCities().map(async (c) => {
+          // boundCities stores CityBean-shaped records plus internal lat/lon.
+          const { lat, lon, ...bean } = c;
+          if (lat != null && lon != null) {
+            try {
+              const cur = await openmeteo.current(c);
+              Object.assign(bean, cur);
+            } catch {
+              // Keep the city visible when weather fetch is temporarily unavailable.
+            }
+          }
+          return bean;
+        }),
+      );
       return res.status(200).json(ok(list));
     }
 
@@ -154,16 +170,18 @@ module.exports = async (req, res) => {
         return res.status(200).json(ok(cityBean(nearestBYCity(lat, lon))));
       }
       if (!isNaN(lat) && !isNaN(lon)) {
-        return res.status(200).json(ok({
-          areaId: `OM_${lat.toFixed(4)}_${lon.toFixed(4)}`,
-          nameCN: "",
-          nameEN: "",
-          provCN: "",
-          provEN: "",
-          districtCN: "",
-          districtEN: "",
-          direct: 0,
-        }));
+        return res.status(200).json(
+          ok({
+            areaId: `OM_${lat.toFixed(4)}_${lon.toFixed(4)}`,
+            nameCN: "",
+            nameEN: "",
+            provCN: "",
+            provEN: "",
+            districtCN: "",
+            districtEN: "",
+            direct: 0,
+          }),
+        );
       }
       return res.status(400).json(ok(null));
     }
@@ -174,10 +192,20 @@ module.exports = async (req, res) => {
         typeof req.body === "string"
           ? JSON.parse(req.body || "{}")
           : req.body || {};
+      if (body.operationType === "1") {
+        boundCities.removeCities(body.addressList);
+      } else {
+        boundCities.addCity(body);
+      }
       return res.status(200).json(ok(null));
     }
 
-    return res.status(404).json({ code: 404, message: "Unknown climate endpoint", success: false, data: null });
+    return res.status(404).json({
+      code: 404,
+      message: "Unknown climate endpoint",
+      success: false,
+      data: null,
+    });
   } catch (err) {
     console.error(`[proxy] ${path}: ${err.message}`);
     res

@@ -1,6 +1,6 @@
 {
   "name": "geely-weather-proxy",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "private": true,
   "description": "Worldwide weather proxy for Geely E8 using Open-Meteo geocoding and forecasts",
   "engines": {
