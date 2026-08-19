@@ -119,7 +119,7 @@ module.exports = async (req, res) => {
     if (path.endsWith("/climate/cityList")) {
       const list = await Promise.all(
         boundCities.listCities().map(async (c) => {
-          // boundCities stores CityBean-shaped records plus internal lat/lon.
+          // /climate/cityList is deserialized client-side as CityItem, so the addressType field name matters
           const { lat, lon, ...bean } = c;
           if (lat != null && lon != null) {
             try {
