@@ -11,7 +11,6 @@ const {
 } = require("../lib/cities");
 const openmeteo = require("../lib/openmeteo");
 const geocoding = require("../lib/geocoding");
-const boundCities = require("../lib/bound-cities");
 
 function ok(data) {
   return { code: 200, message: "success", success: true, data };
@@ -115,22 +114,39 @@ module.exports = async (req, res) => {
       return res.status(200).json(ok(results));
     }
 
-    // --- City management list (per VIN) ---
+    // --- City management list: stateless, built from the client's own local city set ---
+    // The app sends its SP `CityOrderBean` JSON (areaId/districtCN/nameCN/addressType/order) as
+    // `citys`; we only attach live weather. No server-side storage, no default seed city list.
     if (path.endsWith("/climate/cityList")) {
+      const raw = url.searchParams.get("citys") || "[]";
+      let entries;
+      try {
+        entries = JSON.parse(raw);
+      } catch {
+        entries = [];
+      }
+      if (!Array.isArray(entries)) entries = [];
+
       const list = await Promise.all(
-        boundCities.listCities().map(async (c) => {
-          // /climate/cityList is deserialized client-side as CityItem, so the addressType field name matters
-          const { lat, lon, ...bean } = c;
-          if (lat != null && lon != null) {
-            try {
-              const cur = await openmeteo.current(c);
-              Object.assign(bean, cur);
-            } catch {
-              // Keep the city visible when weather fetch is temporarily unavailable.
+        entries
+          .filter((entry) => entry && entry.areaId && (entry.nameCN || entry.districtCN))
+          .map(async (entry) => {
+            const bean = {
+              areaId: entry.areaId,
+              nameCN: entry.nameCN || "",
+              districtCN: entry.districtCN || "",
+              addressType: entry.addressType != null ? entry.addressType : 1,
+            };
+            const city = cityForAreaId(entry.areaId);
+            if (city) {
+              try {
+                Object.assign(bean, await openmeteo.current(city));
+              } catch {
+                // Keep the city visible when weather fetch is temporarily unavailable.
+              }
             }
-          }
-          return bean;
-        }),
+            return bean;
+          }),
       );
       return res.status(200).json(ok(list));
     }
@@ -186,17 +202,8 @@ module.exports = async (req, res) => {
       return res.status(400).json(ok(null));
     }
 
-    // --- Bind/unbind city ---
+    // --- Bind/unbind city: no-op. The city set lives on-device, not on the server. ---
     if (path.endsWith("/climate/bindcity") && req.method === "POST") {
-      const body =
-        typeof req.body === "string"
-          ? JSON.parse(req.body || "{}")
-          : req.body || {};
-      if (body.operationType === "1") {
-        boundCities.removeCities(body.addressList);
-      } else {
-        boundCities.addCity(body);
-      }
       return res.status(200).json(ok(null));
     }
 
