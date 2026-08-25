@@ -12,8 +12,21 @@ const {
 const openmeteo = require("../lib/openmeteo");
 const geocoding = require("../lib/geocoding");
 
+const LEGACY_AREA_IDS = new Map([["110105", "BY_01"]]);
+const MAX_CITY_LIST_ENTRIES = 50;
+const MAX_CITY_LIST_JSON_LENGTH = 20_000;
+
 function ok(data) {
   return { code: 200, message: "success", success: true, data };
+}
+
+function fail(res, status, message) {
+  return res.status(status).json({
+    code: status,
+    message,
+    success: false,
+    data: null,
+  });
 }
 
 function parsePage(url) {
@@ -35,7 +48,8 @@ function byKeyword(keyword) {
 }
 
 function cityForAreaId(areaId) {
-  const byCity = byId.get(areaId);
+  const canonicalAreaId = LEGACY_AREA_IDS.get(areaId) || areaId;
+  const byCity = byId.get(canonicalAreaId);
   if (byCity) return byCity;
   const match = /^OM_(-?\d+(?:\.\d+)?)_(-?\d+(?:\.\d+)?)$/.exec(areaId);
   if (!match) return null;
@@ -119,13 +133,19 @@ module.exports = async (req, res) => {
     // `citys`; we only attach live weather. No server-side storage, no default seed city list.
     if (path.endsWith("/climate/cityList")) {
       const raw = url.searchParams.get("citys") || "[]";
+      if (raw.length > MAX_CITY_LIST_JSON_LENGTH) {
+        return fail(res, 413, "city list is too large");
+      }
       let entries;
       try {
         entries = JSON.parse(raw);
       } catch {
-        entries = [];
+        return fail(res, 400, "invalid city list");
       }
-      if (!Array.isArray(entries)) entries = [];
+      if (!Array.isArray(entries)) return fail(res, 400, "invalid city list");
+      if (entries.length > MAX_CITY_LIST_ENTRIES) {
+        return fail(res, 400, "too many cities");
+      }
 
       const list = await Promise.all(
         entries
@@ -153,13 +173,13 @@ module.exports = async (req, res) => {
 
     // --- Current weather ---
     if (path.endsWith("/climate/current")) {
-      if (!city) return res.status(400).json(ok(null));
+      if (!city) return fail(res, 400, "unknown areaId");
       return res.status(200).json(ok(await openmeteo.current(city)));
     }
 
     // --- Hourly forecast ---
     if (path.endsWith("/climate/hours")) {
-      if (!city) return res.status(400).json(ok(null));
+      if (!city) return fail(res, 400, "unknown areaId");
       return res.status(200).json(ok(await openmeteo.hours(city)));
     }
 
@@ -168,13 +188,13 @@ module.exports = async (req, res) => {
       path.endsWith("/climate/newhalfmonth") ||
       path.endsWith("/climate/halfmonth")
     ) {
-      if (!city) return res.status(400).json(ok(null));
+      if (!city) return fail(res, 400, "unknown areaId");
       return res.status(200).json(ok(await openmeteo.forecast(city)));
     }
 
     // --- Sunrise / sunset ---
     if (path.endsWith("/climate/sunriseAndSunset")) {
-      if (!city) return res.status(400).json(ok(null));
+      if (!city) return fail(res, 400, "unknown areaId");
       return res.status(200).json(ok(await openmeteo.sun(city)));
     }
 
@@ -199,7 +219,7 @@ module.exports = async (req, res) => {
           }),
         );
       }
-      return res.status(400).json(ok(null));
+      return fail(res, 400, "invalid location");
     }
 
     // --- Bind/unbind city: no-op. The city set lives on-device, not on the server. ---
@@ -215,8 +235,6 @@ module.exports = async (req, res) => {
     });
   } catch (err) {
     console.error(`[proxy] ${path}: ${err.message}`);
-    res
-      .status(500)
-      .json({ code: 500, message: err.message, success: false, data: null });
+    fail(res, 502, "weather upstream is unavailable");
   }
 };
